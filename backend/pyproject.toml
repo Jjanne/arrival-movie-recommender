@@ -36,6 +36,8 @@ dependencies = [
       "python-dotenv",
       "neo4j>=5.0.0",
       "httpx>=0.27.0", # async HTTP client (TMDBFetcher)
+      "langchain-openai>=0.2.0", # LLM client (OpenAI-compatible, used for OpenRouter)
+      "langgraph>=0.2.0", # agentic graph runtime for chatbot
       "apscheduler>=3.11.2",
 ]
 

@@ -63,3 +63,9 @@ class FirebaseSettings(BaseModel):
     firebase_private_key: str
     firebase_client_email: str
     firebase_client_id: str
+
+
+class LLMSettings(BaseModel):
+    api_key: str | None = None
+    model: str = "openai/gpt-4o-mini"
+    base_url: str = "https://openrouter.ai/api/v1"

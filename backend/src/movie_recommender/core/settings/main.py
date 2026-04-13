@@ -5,6 +5,7 @@ from typing import List
 from movie_recommender.core.settings.schemas import (
     AppLogicSettings,
     FirebaseSettings,
+    LLMSettings,
     Neo4jSettings,
     RedisSettings,
     DatabaseSettings,
@@ -41,6 +42,7 @@ class AppSettings:
         self.neo4j = self._load_neo4j_settings()
         self.firebase = self._load_firebase_settings()
         self.database = self._load_database_settings()
+        self.llm = self._load_llm_settings()
         # self.storage = self._load_storage_settings() # TODO: implement storage
 
         logger.info(f"Settings initialized for environment: {self.environment}")
@@ -120,6 +122,13 @@ class AppSettings:
             database=os.getenv("DB_NAME"),
             sync_driver=os.getenv("DB_SYNC_DRIVER"),
             async_driver=os.getenv("DB_ASYNC_DRIVER"),
+        )
+
+    def _load_llm_settings(self) -> LLMSettings:
+        return LLMSettings(
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         )
 
     def _load_storage_settings(self) -> StorageSettings:
