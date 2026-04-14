@@ -21,9 +21,11 @@ via closure inside _make_tools() so the LLM only sees domain-level arguments.
 """
 
 import logging
+from collections.abc import AsyncGenerator
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessageChunk
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -32,6 +34,7 @@ from neo4j import AsyncDriver
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from movie_recommender.core.settings.main import AppSettings
+from movie_recommender.schemas.requests.chat import ChatHistoryItem
 from movie_recommender.services.chatbot.tools import get_user_taste_summary, search_movies
 
 logger = logging.getLogger(__name__)
@@ -87,6 +90,7 @@ class ChatbotService:
         redis_client: Any,
         neo4j_driver: AsyncDriver,
         user_id: int,
+        history: list[ChatHistoryItem] | None = None,
     ) -> str:
         """
         Run the ReAct graph for a single user turn and return the final reply.
@@ -97,6 +101,7 @@ class ChatbotService:
             redis_client: Async Redis client (beacon map cache).
             neo4j_driver: Neo4j async driver (knowledge graph).
             user_id: Internal integer user ID (not firebase_uid).
+            history: Optional prior conversation turns.
 
         Returns:
             The agent's final text response as a plain string.
@@ -106,15 +111,78 @@ class ChatbotService:
         """
         tools = self._make_tools(db, redis_client, neo4j_driver, user_id)
         graph = self._build_graph(tools)
+        input_messages = self._build_input_messages(message, history)
 
         logger.debug("Invoking LangGraph agent for message: %.80s", message)
 
-        result = await graph.ainvoke({"messages": [HumanMessage(content=message)]})
+        result = await graph.ainvoke({"messages": input_messages})
         return str(result["messages"][-1].content)
+
+    async def stream(
+        self,
+        message: str,
+        db: AsyncSession,
+        redis_client: Any,
+        neo4j_driver: AsyncDriver,
+        user_id: int,
+        history: list[ChatHistoryItem] | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream text tokens from the ReAct graph as an async generator.
+
+        Yields individual token strings from the agent node only — tool
+        call chunks and non-agent messages are filtered out. The caller
+        is responsible for wrapping tokens in SSE format.
+
+        Args:
+            message: The user's message.
+            db: Active async database session (request-scoped).
+            redis_client: Async Redis client (beacon map cache).
+            neo4j_driver: Neo4j async driver (knowledge graph).
+            user_id: Internal integer user ID (not firebase_uid).
+            history: Optional prior conversation turns.
+
+        Yields:
+            Non-empty text token strings from the final agent response.
+        """
+        tools = self._make_tools(db, redis_client, neo4j_driver, user_id)
+        graph = self._build_graph(tools)
+        input_messages = self._build_input_messages(message, history)
+
+        logger.debug("Streaming LangGraph agent for message: %.80s", message)
+
+        async for msg, metadata in graph.astream(
+            {"messages": input_messages},
+            stream_mode="messages",
+        ):
+            if metadata.get("langgraph_node") != "agent":
+                continue
+            if not isinstance(msg, AIMessageChunk):
+                continue
+            if msg.tool_call_chunks:
+                continue
+            if isinstance(msg.content, str) and msg.content:
+                yield msg.content
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_input_messages(
+        message: str,
+        history: list[ChatHistoryItem] | None,
+    ) -> list:
+        """Convert optional chat history + current message into LangChain messages."""
+        lc_messages = []
+        if history:
+            for item in history:
+                if item.role == "user":
+                    lc_messages.append(HumanMessage(content=item.content))
+                elif item.role == "assistant":
+                    lc_messages.append(AIMessage(content=item.content))
+        lc_messages.append(HumanMessage(content=message))
+        return lc_messages
 
     def _build_graph(self, tools: list):
         """
